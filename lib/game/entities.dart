@@ -130,6 +130,9 @@ class Monster {
   double tx = 0, ty = 0;
   Monster? chasing;
 
+  /// Seconds spent pressed against something solid without getting anywhere.
+  double blocked = 0;
+
   double get r => sqrt(area);
 
   double get effectiveReach => reach + (magnetT > 0 ? 1.2 : 0);

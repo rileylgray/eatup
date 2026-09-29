@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.13.4
+  sdk: ^3.10.8
 
 dependencies:
   flutter:
@@ -13,8 +13,8 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  flame: ^1.38.2
-  flame_audio: ^2.12.2
+  flame: ^1.35.1
+  flame_audio: ^2.11.14
   # Pinned: 9.1.0 imports GoogleMobileAds_Beta.h, which breaks the iOS
   # archive ("Include of non-modular header inside framework module").
   google_mobile_ads: 9.0.0

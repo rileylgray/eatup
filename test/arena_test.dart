@@ -22,6 +22,9 @@ Arena _arena(MapDef map, {int seed = 1, bool tutorial = false}) => Arena(
 /// Steers the player like a simple bot: to the nearest edible thing.
 void _autopilot(Arena a) {
   final p = a.player;
+  // A portrait phone's view, as the renderer would set it.
+  final span = Growth.viewSpan(p.r);
+  a.view = (x: p.x, y: p.y, hw: span / 2 + 150, hh: span * 1.1 + 150);
   Food? best;
   var bestD = double.infinity;
   for (final f in [...a.people, ...a.standingProps]) {
@@ -160,6 +163,45 @@ void main() {
       expect(a.player.alive, isTrue);
       expect(a.player.shield, greaterThan(0));
       expect(a.frozen, isFalse);
+    });
+
+    test('things too big to eat are solid', () {
+      final a = _arena(maps.first);
+      for (var i = 0; i < 60 * 3; i++) {
+        a.update(1 / 60);
+      }
+      final house = a.layout.props.firstWhere((p) => p.kind.building);
+      expect(Growth.canSwallow(a.player.r, house.size), isFalse);
+      a.player
+        ..x = house.x - house.size - a.player.r - 10
+        ..y = house.y;
+      a.inputX = 1;
+      a.inputY = 0;
+      for (var i = 0; i < 60 * 2; i++) {
+        a.frozen = false;
+        a.update(1 / 60);
+      }
+      expect(house.alive, isTrue);
+      final d = sqrt(pow(a.player.x - house.x, 2) + pow(a.player.y - house.y, 2));
+      expect(d, greaterThan(house.size * 0.8));
+    });
+
+    test('people walk round things, not through them', () {
+      final a = _arena(maps.first);
+      final house = a.layout.props.firstWhere((p) => p.kind.building);
+      a.people
+        ..clear()
+        ..add(
+          Person(house.x - house.size - 10, house.y, variant: 0, phase: 0)
+            ..tx = house.x + house.size + 10
+            ..ty = house.y,
+        );
+      final p = a.people.single;
+      for (var i = 0; i < 60 * 2; i++) {
+        a.update(1 / 60);
+        final d = sqrt(pow(p.x - house.x, 2) + pow(p.y - house.y, 2));
+        expect(d, greaterThan(house.size * 0.8), reason: 'frame $i');
+      }
     });
 
     test('a big rival eats a small player', () {

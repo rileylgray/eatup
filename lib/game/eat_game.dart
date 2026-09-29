@@ -215,13 +215,8 @@ class EatGame extends FlameGame {
 
   void pointerMove(Offset p) {
     if (_joyOrigin == null) return;
-    // The base follows a finger that drags past its rim, so reversing is
-    // instant.
-    final o = _joyOrigin!;
-    final d = p - o;
-    if (d.distance > _joyRadius * 1.4) {
-      _joyOrigin = p - d / d.distance * _joyRadius * 1.4;
-    }
+    // The base stays where the finger first landed; dragging past the rim
+    // just holds full speed in that direction.
     _joyPos = p;
     _applyJoy();
   }
@@ -385,6 +380,9 @@ class EatGame extends FlameGame {
       _zoom += (z - _zoom) * min(1.0, dt * 2);
     }
     _shake = max(0, _shake - dt * 30);
+    // People just off screen collide too, so nobody pops out of a wall as
+    // the camera moves.
+    a.view = (x: _cx, y: _cy, hw: size.x / _zoom / 2 + 150, hh: size.y / _zoom / 2 + 150);
 
     for (final p in _particles) {
       p.x += p.vx * dt;

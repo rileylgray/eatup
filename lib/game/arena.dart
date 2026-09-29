@@ -101,6 +101,11 @@ class Arena {
   /// The player's movement input: a vector of length 0..1.
   double inputX = 0, inputY = 0;
 
+  /// The part of town on screen (centre and half-extents), set by the
+  /// renderer. Only people inside it bump into things, which keeps big
+  /// crowds cheap; null means everyone does.
+  ({double x, double y, double hw, double hh})? view;
+
   /// Player combo: things eaten in quick succession.
   int combo = 0;
   double _comboTimer = 0;
@@ -286,7 +291,8 @@ class Arena {
         _think(m, dt);
         final dx = m.tx - m.x, dy = m.ty - m.y;
         final d = sqrt(dx * dx + dy * dy);
-        _steer(m, d > 1 ? dx / d : 0, d > 1 ? dy / d : 0, dt);
+        final hit = _steer(m, d > 1 ? dx / d : 0, d > 1 ? dy / d : 0, dt);
+        _unstick(m, hit, dx, dy, dt);
       }
       _eatFood(m, dt);
     }
@@ -331,13 +337,16 @@ class Arena {
     m.frenzyT = max(0, m.frenzyT - dt);
   }
 
-  void _steer(Monster m, double ix, double iy, double dt) {
+  /// Moves [m] toward the input direction; returns whether it bumped into
+  /// something solid.
+  bool _steer(Monster m, double ix, double iy, double dt) {
     final top = Growth.speed(m.r) * m.speedMult * (m.speedT > 0 ? 1.45 : 1);
     final k = min(1.0, dt * 7);
     m.vx += (ix * top - m.vx) * k;
     m.vy += (iy * top - m.vy) * k;
     m.x += m.vx * dt;
     m.y += m.vy * dt;
+    final hit = _collide(m);
     final pad = m.r * 0.5;
     m.x = m.x.clamp(pad, width - pad);
     m.y = m.y.clamp(pad, height - pad);
@@ -346,7 +355,69 @@ class Arena {
       m.fx += (m.vx / sp - m.fx) * min(1, dt * 8);
       m.fy += (m.vy / sp - m.fy) * min(1, dt * 8);
     }
+    return hit;
   }
+
+  /// How much of a monster's and a prop's radius counts as solid body: a
+  /// little under the drawn size so edges can overlap slightly.
+  static const double _bodyFactor = 0.8, _solidFactor = 0.8;
+
+  /// Things too big to swallow are solid: pushes [m] back out of any it
+  /// overlaps and drops the velocity into them, so it slides along instead
+  /// of passing over. Returns whether it touched anything.
+  bool _collide(Monster m) {
+    final r = m.r;
+    final at = _pushOut(m.x, m.y, r * _bodyFactor, (p) => !Growth.canSwallow(r, p.size), (nx, ny) {
+      final vn = m.vx * nx + m.vy * ny;
+      if (vn < 0) {
+        m.vx -= vn * nx;
+        m.vy -= vn * ny;
+      }
+    });
+    if (at == null) return false;
+    m
+      ..x = at.$1
+      ..y = at.$2;
+    return true;
+  }
+
+  /// Pushes a circle of radius [body] at ([x], [y]) out of every prop that
+  /// [solid] says blocks it, calling [onHit] with each push's outward normal.
+  /// Returns the resolved position, or null when it touched nothing.
+  (double, double)? _pushOut(
+    double x,
+    double y,
+    double body,
+    bool Function(Prop p) solid, [
+    void Function(double nx, double ny)? onHit,
+  ]) {
+    var hit = false;
+    void push(Prop p) {
+      if (!p.alive || !solid(p)) return;
+      final dx = x - p.x, dy = y - p.y;
+      final gap = body + p.size * _solidFactor;
+      final d2 = dx * dx + dy * dy;
+      if (d2 >= gap * gap) return;
+      hit = true;
+      final d = sqrt(d2);
+      // Dead centre: pick a way out.
+      final nx = d > 1e-6 ? dx / d : 1.0, ny = d > 1e-6 ? dy / d : 0.0;
+      x = p.x + nx * gap;
+      y = p.y + ny * gap;
+      onHit?.call(nx, ny);
+    }
+
+    _staticGrid.query(x, y, body + PropKind.tower.size * _solidFactor, push);
+    final far = body + PropKind.bus.size;
+    for (final c in cars) {
+      if (c.alive && (c.x - x).abs() < far && (c.y - y).abs() < far) push(c);
+    }
+    return hit ? (x, y) : null;
+  }
+
+  /// Townsfolk step over tiny clutter (cones, flowers) but not round
+  /// anything bigger.
+  static bool _blocksPeople(Prop p) => p.kind.tier != PropTier.tiny;
 
   // Rivals --------------------------------------------------------------------
 
@@ -438,6 +509,26 @@ class Arena {
     }
   }
 
+  /// A rival pressed against something solid and barely moving sidesteps
+  /// for a moment rather than pushing into it forever.
+  void _unstick(Monster m, bool hit, double dx, double dy, double dt) {
+    final sp = sqrt(m.vx * m.vx + m.vy * m.vy);
+    if (!hit || sp > Growth.speed(m.r) * m.speedMult * 0.35) {
+      m.blocked = max(0, m.blocked - dt);
+      return;
+    }
+    m.blocked += dt;
+    if (m.blocked < 0.4) return;
+    m.blocked = 0;
+    final l = sqrt(dx * dx + dy * dy) + 1e-9;
+    final side = _rng.nextBool() ? 1.0 : -1.0;
+    final dist = m.r * 3 + 120;
+    m.chasing = null;
+    m.tx = (m.x - dy / l * side * dist).clamp(40, width - 40);
+    m.ty = (m.y + dx / l * side * dist).clamp(40, height - 40);
+    m.think = 0.7;
+  }
+
   void _respawn(Monster m) {
     for (var i = 0; i < 12; i++) {
       final x = 80 + _rng.nextDouble() * (width - 160);
@@ -508,8 +599,25 @@ class Arena {
       } else {
         p.vx = p.vy = 0;
       }
-      p.x = (p.x + p.vx * dt).clamp(6, width - 6);
-      p.y = (p.y + p.vy * dt).clamp(6, height - 6);
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      final v = view;
+      final seen = v == null || ((p.x - v.x).abs() < v.hw && (p.y - v.y).abs() < v.hh);
+      final at = seen ? _pushOut(p.x, p.y, Growth.personSize * 0.6, _blocksPeople) : null;
+      if (at != null) {
+        p
+          ..x = at.$1
+          ..y = at.$2;
+        // A stroller who walks into something picks somewhere else to go;
+        // anyone running scared slides along it.
+        if (p.panic <= 0) {
+          p
+            ..tx = p.x
+            ..ty = p.y;
+        }
+      }
+      p.x = p.x.clamp(6, width - 6);
+      p.y = p.y.clamp(6, height - 6);
       p.phase += sqrt(p.vx * p.vx + p.vy * p.vy) * dt * 0.25;
       _peopleGrid.insert(p);
     }
